@@ -1,0 +1,23 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+def svd_decomposition(matrix):
+    u, s_vector, v = np.linalg.svd(matrix)
+    s = np.diag(s_vector)
+
+    number_of_components = 2
+    s_partial = s[:, :number_of_components]
+    v_partial = v[:number_of_components, :]
+
+    reconstructed = u.dot(s_partial.dot(v_partial))
+    return reconstructed
+
+
+template_matrix = np.random.rand(10,20)
+plt.imshow(template_matrix)
+plt.show()
+
+
+reconstructed = svd_decomposition(template_matrix)
+plt.imshow(reconstructed)
+plt.show()
