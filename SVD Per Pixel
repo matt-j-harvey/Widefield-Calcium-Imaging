@@ -1,0 +1,46 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+number_of_components = 100
+matrix_rows = 500
+matrix_columns = 1000
+
+def svd_decomposition(matrix):
+    u, s_vector, v = np.linalg.svd(matrix)
+    s = np.diag(s_vector)
+
+    #number_of_components = 3
+    s_partial = s[:, :number_of_components]
+    v_partial = v[:number_of_components, :]
+
+    sv = s_partial.dot(v_partial)
+    #reconstructed = u.dot(s_partial.dot(v_partial))
+    return u, sv
+
+
+def reconstruct_pixel(u, sv, pixel, length):
+    reconstructed_pixel = []
+
+    for x in range(length):
+        reconstructed_pixel.append(u[pixel].dot(sv[:, x]))
+
+    return reconstructed_pixel
+
+
+
+template_matrix = np.random.rand(matrix_rows, matrix_columns)
+plt.imshow(template_matrix)
+plt.show()
+
+
+u, sv = svd_decomposition(template_matrix)
+pixel_trace = reconstruct_pixel(u, sv, 0, matrix_columns)
+
+plt.plot(template_matrix[0, :])
+plt.plot(pixel_trace)
+
+plt.show()
+
+#plt.imshow(reconstructed)
+#plt.show()
+
