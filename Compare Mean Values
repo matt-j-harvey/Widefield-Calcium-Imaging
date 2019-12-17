@@ -1,0 +1,45 @@
+from os import listdir
+import imageio
+import numpy as np
+import matplotlib.pyplot as plt
+
+#Put LEDs in Different inputs to DAQ
+
+base_directory = r"C:\Widefield Imaging\mid\19_12_16\1"
+directory_1 = base_directory + "\\LED_1\\"
+directory_2 = base_directory + "\\LED_2\\"
+
+led_1_start_image = 0
+led_2_start_image = 1
+
+
+def plot_image_means(directory, start_image):
+    number_of_images = (len(listdir(directory)))
+    print("Number Of images: ", number_of_images)
+
+    values = np.zeros(number_of_images)
+
+    for image_index in range(number_of_images):
+        print(image_index)
+        image_name = (start_image + (2 * image_index))
+        file = imageio.imread(directory + str(image_name) + ".png")
+        file = np.array(file)
+        file = file[:, :, 0]
+        values[image_index] = np.mean(file)
+
+    return values
+
+
+led_1_means = plot_image_means(directory_1, led_1_start_image)
+led_2_means = plot_image_means(directory_2, led_2_start_image)
+
+np.save(base_directory + "LED_1_means", led_1_means)
+np.save(base_directory + "LED_2_means", led_2_means)
+
+
+#led_1_means = np.load(base_directory + "LED_1_means.npy")
+#led_2_means = np.load(base_directory + "LED_2_means.npy")
+
+plt.plot(led_1_means, c="b")
+plt.plot(led_2_means, c="m")
+plt.show()
