@@ -1,0 +1,13 @@
+void write_bin_value(int v)
+{
+  std::fstream bin_out("bin.out",std::ios_base::binary|std::ios_base::out);
+  bin_out.write((char*)&v,sizeof(int));
+}
+
+int read_bin_value()
+{
+  std::fstream bin_in("bin.out",std::ios_base::binary|std::ios_base::in);
+  int value;
+  bin_in.read((char*)&value,sizeof(int));
+  return value;
+}
