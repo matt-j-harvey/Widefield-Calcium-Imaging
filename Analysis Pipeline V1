@@ -1,0 +1,194 @@
+import numpy as np
+from os import listdir, path, mkdir
+import imageio
+import matplotlib.pyplot as plt
+from PyQt5.QtWidgets import *
+from PyQt5.QtGui import QBrush, QColor
+import sys
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib import image
+from PIL import Image
+import scipy
+from sklearn.linear_model import LinearRegression
+from scipy import fftpack, ndimage
+from sklearn.preprocessing import minmax_scale
+import h5py
+
+home_directory = "/media/matthew/Seagate Expansion Drive/Mouse/20191216/"
+blue_led_directory              = home_directory + "LED_1/"
+violet_led_directory            = home_directory + "LED_2/"
+blue_masked_directory           = home_directory + "Blue_Masked/"
+violet_masked_directory         = home_directory + "Violet_Masked/"
+scaled_violet_directory         = home_directory + "Violet_Scaled/"
+subtracted_directory            = home_directory + "LED_Subtract/"
+delta_f_directory               = home_directory + "Delta_F/"
+delta_f_normalised_directory    = home_directory + "Delta_F_Normalised/"
+
+blue_start_number = 4
+violet_start_number = 3
+
+number_of_blue_files = 80000#(len(listdir(blue_led_directory))) - blue_start_number
+number_of_violet_files = 80000#(len(listdir(violet_led_directory))) - violet_start_number
+
+image_shape = [600, 960]
+number_of_pixels = image_shape[0] * image_shape[1]
+
+
+def lowpass_filter(signal, timestep, threshold):
+    number_of_timepoints = np.shape(signal)[0]
+    frequencies = fftpack.fftfreq(number_of_timepoints, d=timestep)
+    discrete_fourier_transform = fftpack.fft(signal)
+
+    super_threshold_indices = abs(frequencies) > threshold
+
+
+    discrete_fourier_transform[super_threshold_indices] = 0
+
+    filtered_signal = fftpack.ifft(discrete_fourier_transform)
+    return filtered_signal
+
+
+def save_matrix(folder_location, output_location, start_number, name, number_of_files):
+    print("Splitting Pixels")
+
+    chunk_size = 10000
+    file_index = 0
+    chunk_index = 0
+
+    with h5py.File(output_location + name + ".hdf5", "w") as f:
+        dataset = f.create_dataset("Data", (number_of_pixels, number_of_files), dtype=np.uint8, chunks=True, compression="gzip")
+
+        while file_index < number_of_files:
+
+            chunklet_index = 0
+            storage_array = np.zeros((number_of_pixels, chunk_size))
+
+            for chunklet in range(chunk_size):
+                print("File Index: ", file_index)
+
+                file = imageio.imread(folder_location + str(file_index * 2 + start_number) + ".png")
+                file = np.array(file)
+                file = file[:, :, 0]
+                file = np.ndarray.flatten(file)
+
+                storage_array[:, chunklet_index] = file
+
+                file_index += 1
+                chunklet_index += 1
+
+            start = chunk_index * chunk_size
+            stop = (chunk_index + 1) * chunk_size
+            dataset[:, start:stop] = storage_array
+            chunk_index += 1
+
+
+def process_pixels():
+    print("Processing Pixels")
+    blue_matrix = h5py.File(home_directory + "blue_flat_trial_matrix" + ".hdf5", 'r')
+    violet_matrix = h5py.File(home_directory + "violet_flat_trial_matrix" + ".hdf5", 'r')
+
+    chunk_size = 10000
+    pixel_index = 0
+    chunk_index = 0
+
+    with h5py.File(home_directory + "processed_test_2.hdf5", "w") as f:
+        dataset = f.create_dataset("Data", (number_of_pixels, number_of_blue_files), dtype=np.float, chunks=True, compression="gzip")
+
+        while pixel_index < number_of_pixels - 1:
+            chunklet_index = 0
+            storage_array = np.zeros((chunk_size, number_of_blue_files), dtype=np.float)
+
+            start = chunk_index * chunk_size
+            stop = (chunk_index + 1) * chunk_size
+
+            blue_chunk      = blue_matrix["Data"][start:stop, :]
+            violet_chunk    = violet_matrix["Data"][start:stop, :]
+
+            for chunklet in range(chunk_size):
+                print("Processing Pixel : ", pixel_index)
+
+                blue_trace     = blue_chunk[chunklet_index, :]
+                violet_trace   = violet_chunk[chunklet_index, :]
+
+                blue_trace = np.reshape(blue_trace, (-1, 1))
+                violet_trace = np.reshape(violet_trace, (-1, 1))
+
+                 # Scale Violet Trace
+                regression = LinearRegression().fit(violet_trace, blue_trace)
+                coefficient = regression.coef_
+                intercept = regression.intercept_
+                shifted_violet_trace = np.add(violet_trace, intercept)
+                scaled_violet_trace = np.multiply(shifted_violet_trace, coefficient)
+
+                # Subtract Violet Trace
+                subtracted_trace = np.subtract(blue_trace, scaled_violet_trace)
+
+                # Calculate Delta F
+                median = np.median(subtracted_trace)
+                baseline = np.percentile(subtracted_trace, 5)
+                delta_f = np.subtract(subtracted_trace, median)
+
+
+
+                try:
+                    delta_f_over_f = np.divide(delta_f, baseline)
+                    #delta_f_over_f = lowpass_filter(delta_f_over_f, 0.033, 8.5)
+
+                    #normalised_trace = minmax_scale(delta_f_over_f, feature_range=(-1, 1))
+                    normalised_trace = scipy.stats.zscore(delta_f_over_f)
+                    normalised_trace = np.ndarray.flatten(normalised_trace)
+
+                except:
+                    normalised_trace = np.zeros(number_of_blue_files)
+
+                storage_array[chunklet_index, :] = normalised_trace
+                pixel_index += 1
+                chunklet_index += 1
+
+            dataset[start:stop, :] = storage_array
+            chunk_index += 1
+
+
+#process_pixels()
+def reconstruct_matrix(matrix_location):
+
+    processed_data = h5py.File(matrix_location, 'r')
+
+    chunk_size = 100
+    chunk_index = 0
+    image_index = 0
+
+    while image_index < number_of_blue_files:
+
+        start = chunk_index * chunk_size
+        stop = (chunk_index + 1) * chunk_size
+
+        storage_matrix = processed_data["Data"][:, start:stop]
+
+        print(np.shape(storage_matrix))
+
+        for chunklet in range(chunk_size):
+            print("Image: ", image_index)
+
+            flat_pixels = storage_matrix[:, chunklet]
+            image = np.reshape(flat_pixels, image_shape)
+            image = ndimage.gaussian_filter(image, 1)
+            plt.axis('off')
+            plt.imshow(image, vmin=-3, vmax=3, cmap="bwr")
+            plt.savefig(home_directory + "Norm_Images/" + str(image_index).zfill(6) + ".jpeg", bbox_inches='tight')
+            plt.close()
+            image_index += 1
+        chunk_index += 1
+
+
+print("Blue files", number_of_blue_files)
+print("Violet files", number_of_violet_files)
+
+number_of_files = min(number_of_blue_files, number_of_violet_files)
+
+#save_matrix(blue_led_directory, home_directory, blue_start_number, "blue_flat_trial_matrix", number_of_files)
+#save_matrix(violet_led_directory, home_directory, violet_start_number, "violet_flat_trial_matrix", number_of_files)
+#process_pixels()
+reconstruct_matrix(home_directory + "processed_test_2.hdf5")
+
