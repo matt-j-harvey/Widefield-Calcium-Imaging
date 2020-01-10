@@ -1,0 +1,32 @@
+def get_max_projection():
+    current_max = np.zeros(number_of_pixels)
+
+    for file_index in range(number_of_files):
+        file = imageio.imread(blue_led_directory + str(file_index * 2 + blue_start_number) + ".png")       #Load File
+        file = np.array(file)
+        file = file[:, :, 0]
+        file = np.ndarray.flatten(file)
+
+        new_array = np.array([current_max, file])
+        current_max = np.max(new_array, axis=0)
+
+    max_projection = np.reshape(current_max, image_shape)
+    np.save(home_directory + "max_projection", max_projection)
+
+
+def get_mask(fraction):
+    image = np.load(home_directory + "Max Projection.npy")
+
+    rows        = image_shape[0]
+    columns     = np.shape(image)[1]
+    max_value   = np.max(image)
+    min_value   = np.min(image)
+    mask        = np.zeros((rows, columns))
+    threshold = ((max_value - min_value) * fraction) + min_value
+
+    for y in range(rows):
+        for x in range(columns):
+            if image[y][x] > threshold:
+                mask[y][x] = 1
+
+    np.save(home_directory + "Mask", mask)
