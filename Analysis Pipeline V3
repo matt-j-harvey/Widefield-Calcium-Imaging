@@ -1,0 +1,108 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from scipy import fftpack, ndimage, signal
+import h5py
+import tables
+
+home_directory = r"/media/matthew/Seagate Expansion Drive/Mouse/2020_01_08/"
+image_shape = [600, 960]
+number_of_files = 216000
+number_of_pixels = image_shape[0] * image_shape[1]
+
+def process_pixels(blue_array, violet_array):
+
+    #Create Output File
+    number_of_pixels = image_shape[0] * image_shape[1]
+    output_file_path = home_directory + "processed_data.h5"
+    output_file     = tables.open_file(output_file_path, mode='w')
+    storage_array   = tables.open_file(output_file_path, output_file.root, 'Processed_Data', atom=tables.Float16Atom(), shape=(0,number_of_pixels), expectedrows=(number_of_files/2))
+
+    print("Processing Pixels")
+    b, a = signal.butter(2, w, 'low')
+
+    for y in range(image_shape[0]):
+        for x in range(image_shape[1]):
+
+            blue_trace   = blue_array[ :, y, x]
+            violet_trace = violet_array[ :, y, x]
+
+            blue_trace = signal.filtfilt(b, a, blue_trace)
+            violet_trace = signal.filtfilt(b, a, violet_trace)
+
+            blue_trace = np.reshape(blue_trace, (-1, 1))
+            violet_trace = np.reshape(violet_trace, (-1, 1))
+
+            # Scale Violet Trace
+            regression = LinearRegression().fit(violet_trace, blue_trace)
+            coefficient = regression.coef_
+            intercept = regression.intercept_
+            shifted_violet_trace = np.add(violet_trace, intercept)
+            scaled_violet_trace = np.multiply(shifted_violet_trace, coefficient)
+
+            # Subtract Violet Trace
+            subtracted_trace = np.subtract(blue_trace, scaled_violet_trace)
+            subtracted_trace = np.add(subtracted_trace, abs(min(subtracted_trace)))
+
+            #Calculate Delta F
+            baseline = np.percentile(subtracted_trace, 5)
+            delta_f = np.subtract(subtracted_trace, baseline)
+            delta_f = np.clip(delta_f, a_min=0, a_max=max(delta_f))
+            delta_f_over_f = np.divide(delta_f, baseline)
+
+            normalised_trace = np.divide(delta_f_over_f, max(delta_f_over_f))
+            normalised_trace = np.ndarray.flatten(normalised_trace)
+
+            storage_array.append(normalised_trace)
+
+    return storage_array
+
+# process_pixels()
+def reconstruct_matrix(matrix_location):
+    processed_data = h5py.File(matrix_location, 'r')
+
+    chunk_size = 100
+    chunk_index = 0
+    image_index = 0
+
+    while image_index < number_of_blue_files:
+
+        start = chunk_index * chunk_size
+        stop = (chunk_index + 1) * chunk_size
+
+        storage_matrix = processed_data["Data"][:, start:stop]
+
+        print(np.shape(storage_matrix))
+
+        for chunklet in range(chunk_size):
+            print("Image: ", image_index)
+
+            flat_pixels = storage_matrix[:, chunklet]
+            #print("Min", min(flat_pixels))
+            #print("Max: ", max(flat_pixels))
+            image = np.reshape(flat_pixels, image_shape)
+            image = ndimage.gaussian_filter(image, 1)
+            plt.axis('off')
+            plt.imshow(image, vmin=0, vmax=0.5, cmap="jet")
+            plt.savefig(home_directory + "Norm_Images_Rainbow/" + str(image_index).zfill(6) + ".jpeg", bbox_inches='tight')
+            plt.close()
+            image_index += 1
+        chunk_index += 1
+
+
+#Butterworth Settings
+sampling_frequency = 30
+cutoff_frequency = 8.5                         # In Hertz
+w = cutoff_frequency / (sampling_frequency / 2) # Normalize the frequency
+
+low_cutoff_frequency = 0.1
+w_low = low_cutoff_frequency / (sampling_frequency / 2)
+b, a = signal.butter(2, [w_low, w], 'bandpass')
+
+
+print("Blue files", number_of_blue_files)
+
+#save_matrix(blue_led_directory, home_directory, blue_start_number, "blue_flat_trial_matrix", number_of_blue_files)
+#save_matrix(violet_led_directory, home_directory, violet_start_number, "violet_flat_trial_matrix", number_of_violet_files)
+#process_pixels()
+reconstruct_matrix(home_directory + "processed_test_2.hdf5")
