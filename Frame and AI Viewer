@@ -1,0 +1,458 @@
+import scipy.io as sio
+import numpy as np
+import matplotlib.pyplot as plt
+from PyQt5.QtWidgets import *
+from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtCore import Qt
+import sys
+from matplotlib.figure import Figure
+import matplotlib.image as mpimg
+from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
+from mpl_toolkits.mplot3d import Axes3D
+import cv2
+import seaborn as sns
+import pandas as pd
+import imageio as io
+
+def read_matlab_file(file_location):
+    data = sio.loadmat(file_location)
+    actual_data = data['ans']
+    return actual_data
+
+def get_stream_names(data):
+    names = data[0][0][6][0]
+    clean_names = []
+
+    for i in range(len(names)):
+        clean_name = str(names[i])
+        clean_name = clean_name.replace("[", "")
+        clean_name = clean_name.replace("]", "")
+        clean_name = clean_name.replace("'", "")
+        clean_names.append(clean_name)
+
+    stream_names = clean_names
+    number_of_streams = len(stream_names)
+
+    return stream_names, number_of_streams
+
+def extract_streams(data):
+    global data_matrix
+    global number_of_timepoints
+
+    data_matrix = data[0][0][11]
+    number_of_timepoints = np.shape(data_matrix)[0]
+
+    return data_matrix
+
+
+def plot_streams(data_matrix, stream_names, number_of_streams):
+
+    for stream in range(number_of_streams):
+        plt.title(stream_names[stream])
+        plt.plot(data_matrix[:,stream])
+        plt.show()
+
+
+def get_led_times(stream):
+
+    #state 0 - off
+    #state 1 - off
+
+    current_duration = 0
+    threshold = 1000
+    number_of_timepoints = np.shape(stream)[0]
+
+    print("Number of timepoints", number_of_timepoints)
+
+    #Get Start point
+    start_point = -1
+    timepoint = 0
+    while start_point == -1:
+        value = stream[timepoint]
+        if value < threshold:
+            start_point = timepoint
+
+    print("start: ", start_point)
+
+    light_onsets = []
+    light_durations = []
+    state = 0
+    current_duration = 0
+
+    for timepoint in range(start_point, number_of_timepoints):
+
+        if stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                light_onsets.append(timepoint)
+            else:
+                current_duration += 1
+
+        else:
+            if state == 1:
+                state = 0
+                light_durations.append(current_duration)
+                current_duration = 0
+            else:
+                pass
+
+    print("light onsets", light_onsets)
+    #plt.scatter(light_onsets)
+    #plt.show()
+
+    number_of_onsets = np.shape(light_onsets)[0]
+    light_onset_gaps = np.subtract(light_onsets[:number_of_onsets-1],light_onsets[1:])
+    print("light onset gaps", light_onset_gaps)
+
+    gap_datafram = pd.DataFrame(light_onset_gaps)
+    sns.swarmplot(x=["Onset gaps"], data=gap_datafram)
+    plt.show()
+
+    print("light light_durations", light_durations)
+    #plt.scatter(light_durations)
+    #plt.show()
+
+
+def get_trigger_start(trigger_stream):
+    threshold = 1000
+
+    window_start = False
+    index = 0
+    while window_start == False:
+        value = trigger_stream[index]
+        if value > threshold:
+            window_start = index
+        index +=1
+
+    return window_start
+
+
+def count_camera_frames(frame_stream, start, stop):
+
+    #state 0 = not in frame
+    #state 1 = in frame
+
+    frame_onsets = []
+    frame_durations = []
+    state = 0
+    current_duration = 0
+    threshold = 100
+
+    for timepoint in range(start-100, stop):
+
+        if frame_stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                frame_onsets.append(timepoint)
+            else:
+                current_duration += 1
+
+        else:
+            if state == 1:
+                state = 0
+                frame_durations.append(current_duration)
+                current_duration = 0
+            else:
+                pass
+
+    return frame_onsets, frame_durations
+
+
+def get_frame_indexes(frame_stream, trigger_start):
+
+    frame_indexes = {}
+    state = 0
+    threshold = 100
+    count = 0
+
+    for timepoint in range(trigger_start, len(frame_stream)):
+
+        if frame_stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                frame_indexes[timepoint] = count
+                count += 1
+
+        else:
+            if state == 1:
+                state = 0
+            else:
+                pass
+
+    return frame_indexes
+
+
+def get_step_onsets(data_stream, start):
+        onsets = []
+        state = 0
+        threshold = 100
+
+        for timepoint in range(start, len(data_stream)):
+
+            if data_stream[timepoint] > threshold:
+                if state == 0:
+                    state = 1
+                    onsets.append(timepoint)
+
+            else:
+                if state == 1:
+                    state = 0
+
+        return onsets
+
+
+def get_frames_around_points(frame_indexes, points):
+
+    frame_window_size = 500
+
+    selected_frames = []
+    frame_times = frame_indexes.keys()
+
+    for point in points:
+        print("Point", point)
+
+        for dt in range(frame_window_size):
+            proposed_time = point + dt
+
+            if proposed_time in frame_times:
+                frame = frame_indexes[proposed_time]
+                selected_frames.append(frame)
+
+    return selected_frames
+
+
+def get_average_of_frames(frames, preceeding_frames_to_ignore):
+    number_of_frames = len(frames)
+    print("Number of frames", number_of_frames)
+    frame_list = []
+
+    count = 0
+    for frame in frames:
+        real_frame_index = frame - preceeding_frames_to_ignore
+        if real_frame_index <= 0:
+            count +=1
+
+            if frame < 15000:
+                data = plt.imread(frame_directory + str(frame).zfill(6) + ".jpeg")
+                frame_list.append(data)
+
+    print("Number of actual frames", count)
+    frame_list = np.array(frame_list)
+    print(np.shape(frame_list))
+
+    frame_list = np.mean(frame_list, axis=0)
+    print(np.shape(frame_list))
+    plt.imshow(frame_list[:,:,0], cmap="inferno")
+    plt.show()
+
+def get_frame_at_point(timepoint):
+
+    frame_times = frame_indexes.keys()
+
+    found_frame = False
+    count = 0
+    while not found_frame:
+        if timepoint + count in frame_times:
+            return frame_indexes[timepoint + count]
+            found_frame = True
+        else:
+            count += 1
+
+
+
+class window(QWidget):
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Frame Selector")
+        self.setGeometry(0,0,500,500)
+        self.layout = QGridLayout()
+
+
+        self.running_figure = Figure()
+        self.running_canvas = FigureCanvas(self.running_figure)
+
+        self.vis_1_figure = Figure()
+        self.vis_1_canvas = FigureCanvas(self.vis_1_figure)
+
+        self.vis_2_figure = Figure()
+        self.vis_2_canvas = FigureCanvas(self.vis_2_figure)
+
+        self.lick_figure = Figure()
+        self.lick_canvas = FigureCanvas(self.lick_figure)
+
+        self.blue_figure = Figure()
+        self.blue_canvas = FigureCanvas(self.blue_figure)
+
+        self.scroll_bar = QScrollBar(Qt.Horizontal)
+        self.scroll_bar.valueChanged.connect(self.change_timepoint)
+
+        self.frame_label = QLabel("0")
+
+        self.get_frame_button = QPushButton("Grab Frame")
+        self.get_frame_button.clicked.connect(self.get_frame)
+
+        self.brain_figure = Figure()
+        self.brain_canvas = FigureCanvas(self.brain_figure)
+
+        self.layout.addWidget(self.running_canvas,      0, 0, 1, 2)
+        self.layout.addWidget(self.vis_1_canvas,        1, 0, 1, 2)
+        self.layout.addWidget(self.vis_2_canvas,        2, 0, 1, 2)
+        self.layout.addWidget(self.lick_canvas,         3, 0, 1, 2)
+        #self.layout.addWidget(self.blue_canvas,         4, 0, 1, 2)
+        self.layout.addWidget(self.scroll_bar,          4, 0, 1, 2)
+        self.layout.addWidget(self.frame_label,         5, 0, 1, 1)
+        self.layout.addWidget(self.get_frame_button,    5, 1, 1, 1)
+
+        self.layout.addWidget(self.brain_canvas,         0, 2, 4, 1)
+        self.setLayout(self.layout)
+
+    def display_trace(self, figure, canvas, data):
+        figure.clear()
+        axis = figure.add_subplot(111)
+        axis.plot(data)
+        plt.show()
+
+        canvas.draw()
+        canvas.update()
+        app.processEvents()
+
+    def display_image(self, figure, canvas, data):
+        figure.clear()
+        axis = figure.add_subplot(111)
+        axis.imshow(data)
+        plt.show()
+
+        canvas.draw()
+        canvas.update()
+        app.processEvents()
+
+
+    def change_timepoint(self):
+        value = self.scroll_bar.value()
+        print(value)
+        self.frame_label.setText(str(value))
+
+    def get_frame(self):
+        value = self.scroll_bar.value()
+        frame_index = get_frame_at_point(value)
+        print("Frame: ", frame_index)
+
+        frame_index = frame_index - 18000
+
+        image = io.imread("/home/matthew/Documents/20_01_10/Norm_Images/" + str(frame_index).zfill(6) + ".jpeg")
+        self.display_image(self.brain_figure, self.brain_canvas, image)
+
+if __name__ == '__main__':
+
+    app = QApplication([])
+
+
+    # Directory Locations
+    frame_directory = "/media/matthew/Seagate Expansion Drive/Mouse/2020_01_08/Norm_Images/"
+    directory = "/home/matthew/Documents/20_01_10/Output.mat"
+
+    # Extract Data
+    data = read_matlab_file(directory)
+    stream_names, number_of_streams = get_stream_names(data)
+    data_matrix = extract_streams(data)
+
+    print("Stream Names: ", stream_names)
+
+    reward_stream   = data_matrix[:, 0]
+    lick_stream     = data_matrix[:, 1]
+    vis_1_stream    = data_matrix[:, 2]
+    vis_2_stream    = data_matrix[:, 3]
+    running_stream  = data_matrix[:, 7]
+    trigger_stream  = data_matrix[:, 9]
+    frame_stream    = data_matrix[:, 10]
+    led_1_stream    = data_matrix[:, 11]
+    led_2_stream    = data_matrix[:, 12]
+
+
+    #Get Recording Start Time
+    global trigger_start
+    trigger_start = get_trigger_start(trigger_stream)
+    print("Trigger start", trigger_start)
+
+    #Get Frame Indexes
+    global frame_indexes
+    frame_indexes = get_frame_indexes(led_2_stream, trigger_start)
+    print("Frame Indexes", frame_indexes)
+
+    print("Number of frames, ", len(frame_indexes.keys()))
+
+    frame_selector = window()
+    frame_selector.show()
+
+    frame_selector.display_trace(frame_selector.running_figure,     frame_selector.running_canvas,      running_stream)
+    frame_selector.display_trace(frame_selector.vis_1_figure,       frame_selector.vis_1_canvas,        vis_1_stream)
+    frame_selector.display_trace(frame_selector.vis_2_figure,       frame_selector.vis_2_canvas,        vis_2_stream)
+    frame_selector.display_trace(frame_selector.lick_figure,        frame_selector.lick_canvas,         lick_stream)
+
+    frame_selector.scroll_bar.setMaximum(len(frame_stream))
+    #frame_selector.display_trace(frame_selector.blue_figure,     frame_selector.blue_canvas,      blue_stream)
+
+    print("traces displayed")
+
+
+    vis_1_onsets = get_step_onsets(vis_1_stream, trigger_start)
+    vis_2_onsets = get_step_onsets(vis_2_stream, trigger_start)
+
+    print("Vis 1 onsets", vis_1_onsets)
+    print("Vis 2 onsets", vis_2_onsets)
+
+    blue_start_number = 36001
+    preceeding_frames_to_ignore = int(blue_start_number / 2)
+
+    selected_frames = get_frames_around_points(frame_indexes, vis_2_onsets)
+    get_average_of_frames(selected_frames, preceeding_frames_to_ignore)
+
+
+    sys.exit(app.exec_())
+
+
+
+    """
+
+    frame_indexes = get_frame_indexes(frame_stream, trigger_start)
+    print("Frame Indexes", frame_indexes)
+
+    vis_1_onsets = get_step_onsets(vis_1_stream, trigger_start)
+    vis_2_onsets = get_step_onsets(vis_2_stream, trigger_start)
+
+    print("Vis 1 onsets", vis_1_onsets)
+    print("Vis 2 onsets", vis_2_onsets)
+
+    # plt.plot(vis_1_stream)
+    # plt.plot(vis_2_stream)
+    # plt.show()
+
+    plt.plot(running_stream)
+    plt.show()
+
+    blue_start_number = 36001
+    preceeding_frames_to_ignore = int(blue_start_number / 2)
+
+    selected_frames = get_frames_around_points(frame_indexes, vis_2_onsets)
+    get_average_of_frames(selected_frames, preceeding_frames_to_ignore)
+
+    """
+
+    #trigger_start, trigger_stop = get_trigger_window(data_matrix[:, 9])
+    #frame_onsets, frame_durations = count_camera_frames(frame_stream, trigger_start, 22118)
+
+    #print("start: ", trigger_start)
+    #print("stop: ", trigger_stop)
+   # print("Number of frames: ", len(frame_onsets))
+    #print("Frame Onsets: ", frame_onsets)
+    #print("Frame Durations: ", frame_durations)
+
+    """
+    # get_led_times(data_matrix[:, 12])
+
+
+    """
+
+
+
