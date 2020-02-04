@@ -1,0 +1,392 @@
+from PyDAQmx import DAQmxTypes, DAQmxConstants, DAQmxFunctions, DAQmxCallBack
+import numpy as np
+import pyqtgraph as pg
+import matplotlib.pyplot as plt
+from PyQt5.QtWidgets import *
+from PyQt5.QtGui import *
+from PyQt5.QtCore import *
+import sys
+import tables
+import threading
+import time
+import imageio
+import h5py
+import os
+
+pg.setConfigOptions(imageAxisOrder='row-major')
+pg.setConfigOption('background', 'w')
+pg.setConfigOption('foreground', 'k')
+
+def unpack_data(data):
+    number_of_seconds = np.shape(data)[0]
+    number_of_channels = np.shape(data)[1]
+    sampling_rate = np.shape(data)[2]
+
+    print("Number of seconds", number_of_seconds)
+
+    data_matrix = np.zeros((number_of_channels, number_of_seconds * sampling_rate))
+
+    for second in range(number_of_seconds):
+        data_window = data[second]
+        start_point = second * sampling_rate
+
+        for channel in range(number_of_channels):
+            data_matrix[channel, start_point:start_point + sampling_rate] = data_window[channel]
+
+    return data_matrix
+
+def get_frame_indexes(frame_stream):
+
+    frame_indexes = {}
+    state = 0
+    threshold = 2
+    count = 0
+
+    for timepoint in range(0, len(frame_stream)):
+
+        if frame_stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                frame_indexes[timepoint] = count
+                count += 1
+
+        else:
+            if state == 1:
+                state = 0
+            else:
+                pass
+
+    return frame_indexes
+
+def get_frame_at_point(frame_indexes, timepoint):
+
+    frame_times = frame_indexes.keys()
+    for x in range(100):
+        if timepoint + x in frame_times:
+            return frame_indexes[timepoint+x]
+
+    else:
+        return -1
+
+class ai_window(QWidget):
+
+    def __init__(self,parent=None):
+        super(ai_window, self).__init__(parent)
+
+        #Setup Window
+        self.setWindowTitle("PyI Recorder")
+        self.setGeometry(0,0,1000,500)
+        self.setStyleSheet("background-color: white;")
+
+        self.data = []
+        self.frame_indexes = []
+        self.image_folder = []
+
+        self.pen = pg.mkPen(color=(100, 100, 200), width=2)
+
+        # Create Graph Displays
+        self.graph_1_widget = pg.PlotWidget()
+        self.graph_1_widget.setYRange(0,5)
+        self.graph_1_label = QLabel("Reward")
+        self.graph_1_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_2_widget = pg.PlotWidget()
+        self.graph_2_widget.setYRange(0,2)
+        self.graph_2_label = QLabel("Lick Signal")
+        self.graph_2_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_3_widget = pg.PlotWidget()
+        self.graph_3_widget.setYRange(0,5)
+        self.graph_3_label = QLabel("Stimulus 1")
+        self.graph_3_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_4_widget = pg.PlotWidget()
+        self.graph_4_widget.setYRange(0,5)
+        self.graph_4_label = QLabel("Stimulus 2")
+        self.graph_4_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_5_widget = pg.PlotWidget()
+        self.graph_5_widget.setYRange(0,5)
+        self.graph_5_label = QLabel("Odour 1")
+        self.graph_5_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_6_widget = pg.PlotWidget()
+        self.graph_6_widget.setYRange(0, 5)
+        self.graph_6_label = QLabel("Odour 2")
+        self.graph_6_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_7_widget = pg.PlotWidget()
+        self.graph_7_widget.setYRange(0, 5)
+        self.graph_7_label = QLabel("Irrelevance")
+        self.graph_7_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_8_widget = pg.PlotWidget()
+        self.graph_8_widget.setYRange(0.4, 1)
+        self.graph_8_label = QLabel("Running Speed")
+        self.graph_8_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_9_widget = pg.PlotWidget()
+        self.graph_9_widget.setYRange(0, 5)
+        self.graph_9_label = QLabel("Trial End")
+        self.graph_9_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_10_widget = pg.PlotWidget()
+        self.graph_10_widget.setYRange(0, 5)
+        self.graph_10_label = QLabel("Camera Trigger")
+        self.graph_10_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_11_widget = pg.PlotWidget()
+        self.graph_11_widget.setYRange(0, 5)
+        self.graph_11_label = QLabel("Camera Frames")
+        self.graph_11_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_12_widget = pg.PlotWidget()
+        self.graph_12_widget.setYRange(0, 5)
+        self.graph_12_label = QLabel("LED 1")
+        self.graph_12_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+        self.graph_13_widget = pg.PlotWidget()
+        self.graph_13_widget.setYRange(0, 5)
+        self.graph_13_label = QLabel("LED 2")
+        self.graph_13_label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+
+
+        #Create Scroll Bar
+        self.time_slider = QSlider(Qt.Horizontal)
+        self.time_slider.valueChanged.connect(self.plot_data)
+        self.time_slider.setMaximum(2000000)
+        self.time_slider.setSingleStep(10)
+
+        #Create_Frame_Viewer
+        # Create Display Image View
+        self.frame_viewer_widget = pg.GraphicsLayoutWidget()
+        self.frame_viewer_viewbox = self.frame_viewer_widget.addViewBox(lockAspect=1, invertY=True)
+        self.frame_viewer_image = pg.ImageItem()
+        self.frame_viewer_viewbox.addItem(self.frame_viewer_image)
+        self.frame_viewer_viewbox.setAspectLocked(True)
+
+
+        #Add Widgets To Layout
+        self.main_layout = QGridLayout()
+        self.main_layout.addWidget(self.graph_1_label,          0, 0, 1, 2)
+        self.main_layout.addWidget(self.graph_1_widget,         1, 0, 2, 2)
+
+        self.main_layout.addWidget(self.graph_2_label,          3, 0, 1, 2)
+        self.main_layout.addWidget(self.graph_2_widget,         4, 0, 2, 2)
+
+        self.main_layout.addWidget(self.graph_3_label,          6, 0, 1, 2)
+        self.main_layout.addWidget(self.graph_3_widget,         7, 0, 2, 2)
+
+        self.main_layout.addWidget(self.graph_4_label,          9, 0, 1, 2)
+        self.main_layout.addWidget(self.graph_4_widget,         10, 0, 2, 2)
+
+        self.main_layout.addWidget(self.graph_5_label,          12, 0, 1, 2)
+        self.main_layout.addWidget(self.graph_5_widget,         13, 0, 2, 2)
+
+        self.main_layout.addWidget(self.graph_6_label,          15, 0, 1, 2)
+        self.main_layout.addWidget(self.graph_6_widget,         16, 0, 2, 2)
+
+        self.main_layout.addWidget(self.graph_7_label,          0, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_7_widget,         1, 2, 2, 2)
+
+        self.main_layout.addWidget(self.graph_8_label,          3, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_8_widget,         4, 2, 2, 2)
+
+        self.main_layout.addWidget(self.graph_9_label,          6, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_9_widget,         7, 2, 2, 2)
+
+        self.main_layout.addWidget(self.graph_10_label,         9, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_10_widget,        10, 2, 2, 2)
+
+        self.main_layout.addWidget(self.graph_11_label,         12, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_11_widget,        13, 2, 2, 2)
+
+        self.main_layout.addWidget(self.graph_12_label,         15, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_12_widget,        16, 2, 2, 2)
+
+        self.main_layout.addWidget(self.graph_13_label,         18, 2, 1, 2)
+        self.main_layout.addWidget(self.graph_13_widget,        19, 2, 2, 2)
+
+        self.main_layout.addWidget(self.time_slider,            20, 0, 2, 22)
+
+        self.main_layout.addWidget(self.frame_viewer_widget,    0, 4, 20, 20)
+
+        self.setLayout(self.main_layout)
+
+
+    def plot_data(self):
+
+        self.start_point = self.time_slider.value()
+        self.window_size = 500
+
+        frame = get_frame_at_point(self.frame_indexes, self.start_point)
+        print("Frame: ", frame)
+        if frame != -1:
+            image_data = imageio.imread(self.image_folder + str(frame).zfill(6) + ".jpeg")
+            self.frame_viewer_image.setImage(image_data, autoLevels=False, levels=(0, 255))
+
+        self.graph_1_widget.clear()
+        self.graph_1_widget.plot(self.data[0][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_2_widget.clear()
+        self.graph_2_widget.plot(self.data[1][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_3_widget.clear()
+        self.graph_3_widget.plot(self.data[2][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_4_widget.clear()
+        self.graph_4_widget.plot(self.data[3][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_5_widget.clear()
+        self.graph_5_widget.plot(self.data[4][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_6_widget.clear()
+        self.graph_6_widget.plot(self.data[5][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_7_widget.clear()
+        self.graph_7_widget.plot(self.data[6][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_8_widget.clear()
+        self.graph_8_widget.plot(self.data[7][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_9_widget.clear()
+        self.graph_9_widget.plot(self.data[8][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_10_widget.clear()
+        self.graph_10_widget.plot(self.data[9][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_11_widget.clear()
+        self.graph_11_widget.plot(self.data[10][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_12_widget.clear()
+        self.graph_12_widget.plot(self.data[11][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+        self.graph_13_widget.clear()
+        self.graph_13_widget.plot(self.data[12][self.start_point:self.start_point+self.window_size], pen=self.pen)
+
+
+
+
+def get_step_onsets(trace,threshold=2,window=100):
+    state = 0
+    number_of_timepoints = len(trace)
+    onset_times = []
+    time_below_threshold = 0
+
+    onset_line = []
+
+    for timepoint in range(number_of_timepoints):
+        if state == 0:
+            if trace[timepoint] > threshold:
+                state = 1
+                onset_times.append(timepoint)
+                time_below_threshold = 0
+            else:
+                pass
+        elif state == 1:
+            if trace[timepoint] > threshold:
+                time_below_threshold = 0
+            else:
+                time_below_threshold += 1
+                if time_below_threshold > window:
+                    state = 0
+                    time_below_threshold = 0
+        onset_line.append(state)
+
+    return onset_times, onset_line
+
+
+def get_frames_within_windows(frame_indexes, step_onsets, offset, window_size):
+
+    frames_to_average = []
+    frame_times = frame_indexes.keys()
+
+    for step_onset in step_onsets:
+        for interval in range(window_size):
+            timepoint = step_onset + offset + interval
+            if timepoint in frame_times:
+                frames_to_average.append(frame_indexes[timepoint])
+
+    return frames_to_average
+
+
+def average_frames(frames_to_average, save_location):
+
+    frames = []
+
+    processed_file_location = r"C:\Widefield Imaging\NRXNR\2020_01_24\Processed_Data.hdf5"
+    processed_data_file = h5py.File(processed_file_location, 'r')
+    processed_data = processed_data_file["Data"]
+
+    for frame in frames_to_average:
+        data = processed_data[:, frame]
+        frames.append(data)
+        print("Data shape", np.shape(data))
+
+    mean_frame = np.mean(frames, axis=0)
+    print("mean data shape", np.shape(mean_frame))
+
+    mean_frame = np.ndarray.reshape(mean_frame,(600,608))
+    print("mean frame shape", np.shape(mean_frame))
+
+    plt.imshow(mean_frame,  vmin=0, vmax=0.5, cmap="inferno")
+    plt.savefig(save_location)
+    plt.close()
+
+
+def get_signal_time_course(frame_indexes, data_stream, stimulus_name):
+
+    base_folder = r"C:\Users\KhanLab\Pictures\Aligned Averages"
+    full_folder = base_folder + "\\" + stimulus_name
+    #os.mkdir(full_folder)
+
+    stim_onset_times, stim_onset_line = get_step_onsets(data_stream, window=200, threshold=0.5)
+    offset_time_list = [0,   200, 400, 600, 800, 1000, 2000, 3000, 4000, 5000]
+    window_size_list = [200, 200, 200, 200, 200, 1000, 1000, 1000, 1000, 1000]
+    number_of_offsets = len(offset_time_list)
+
+    for offset in range(number_of_offsets):
+        offset_time = offset_time_list[offset]
+        window_size = window_size_list[offset]
+        frames_to_average = get_frames_within_windows(frame_indexes, stim_onset_times, offset_time, window_size)
+
+        save_location = full_folder + "\\" + str(offset_time) + ".jpeg"
+        print(save_location)
+        average_frames(frames_to_average, save_location)
+
+
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+
+    storage_path = r"C:\Widefield Imaging\NRXNR\\2020_01_24\\20200124-164347.h5"
+    table = tables.open_file(storage_path, mode='r')
+    data = table.root.Data
+
+    data_matrix = unpack_data(data)
+    data_matrix = np.clip(data_matrix, a_min=0, a_max=None)
+
+    """
+    window_instance = ai_window()
+    window_instance.show()
+    """
+
+    frame_indexes = get_frame_indexes(data_matrix[12])
+    print("Frame indexes: ", frame_indexes)
+
+    """
+    window_instance.frame_indexes = frame_indexes
+    window_instance.data = data_matrix
+    """
+
+    #window_instance.image_folder = r"C:\Widefield Imaging\NRXNR\2020_01_24\Norm_Images\\"
+
+
+    #get_signal_time_course(frame_indexes, data_matrix[3], "Vis stim 2")
+    get_signal_time_course(frame_indexes, data_matrix[1], "Lick")
+    get_signal_time_course(frame_indexes, data_matrix[0], "Reward")
+    #get_signal_time_course(frame_indexes, data_matrix[2], "Vis stim 1")
+
+    sys.exit(app.exec_())
+
