@@ -1,0 +1,182 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+import h5py
+import os
+import tables
+
+def unpack_data(data):
+    number_of_seconds = np.shape(data)[0]
+    number_of_channels = np.shape(data)[1]
+    sampling_rate = np.shape(data)[2]
+
+    print("Number of seconds", number_of_seconds)
+
+    data_matrix = np.zeros((number_of_channels, number_of_seconds * sampling_rate))
+
+    for second in range(number_of_seconds):
+        data_window = data[second]
+        start_point = second * sampling_rate
+
+        for channel in range(number_of_channels):
+            data_matrix[channel, start_point:start_point + sampling_rate] = data_window[channel]
+
+    return data_matrix
+
+def get_frame_indexes(frame_stream):
+    frame_indexes = {}
+    state = 0
+    threshold = 2
+    count = 0
+
+    for timepoint in range(0, len(frame_stream)):
+
+        if frame_stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                frame_indexes[timepoint] = count
+                count += 1
+
+        else:
+            if state == 1:
+                state = 0
+            else:
+                pass
+
+    return frame_indexes
+
+def get_frame_at_point(frame_indexes, timepoint):
+    frame_times = frame_indexes.keys()
+    for x in range(100):
+        if timepoint + x in frame_times:
+            return frame_indexes[timepoint + x]
+
+    else:
+        return -1
+
+def get_step_onsets(trace, threshold=2, window=100):
+    state = 0
+    number_of_timepoints = len(trace)
+    onset_times = []
+    time_below_threshold = 0
+
+    onset_line = []
+
+    for timepoint in range(number_of_timepoints):
+        if state == 0:
+            if trace[timepoint] > threshold:
+                state = 1
+                onset_times.append(timepoint)
+                time_below_threshold = 0
+            else:
+                pass
+        elif state == 1:
+            if trace[timepoint] > threshold:
+                time_below_threshold = 0
+            else:
+                time_below_threshold += 1
+                if time_below_threshold > window:
+                    state = 0
+                    time_below_threshold = 0
+        onset_line.append(state)
+
+    return onset_times, onset_line
+
+
+def get_frames_within_windows(frame_indexes, step_onsets, offset, window_size):
+    frames_to_average = []
+    frame_times = frame_indexes.keys()
+
+    for step_onset in step_onsets:
+        for interval in range(window_size):
+            timepoint = step_onset + offset + interval
+            if timepoint in frame_times:
+                frames_to_average.append(frame_indexes[timepoint])
+
+    return frames_to_average
+
+
+def average_frames(frames_to_average, save_location, data_file):
+    frames = []
+    number_of_frames_to_average = len(frames_to_average)
+    count = 0
+
+    blue_matrix =  h5py.File(data_file, 'r')
+    data = blue_matrix["Data"]
+
+    #number_of_pixels = np.shape(data)[0]
+    #number_of_files = np.shape(data)[1]
+
+    for frame in frames_to_average:
+        frame_data = data[:, frame]
+        frames.append(frame_data)
+        count+=1
+        print((count / number_of_frames_to_average)*100, "% complete")
+
+    mean_frame = np.mean(frames, axis=0)
+    print("mean data shape", np.shape(mean_frame))
+
+    mean_frame = np.ndarray.reshape(mean_frame, (600, 608))
+    print("mean frame shape", np.shape(mean_frame))
+
+    plt.imshow(mean_frame, cmap="gray")
+    plt.savefig(save_location + ".png")
+    plt.close()
+
+
+def get_signal_time_course(frame_indexes, data_stream, stimulus_name):
+    base_folder = r"C:\Widefield Imaging\LED_Alignment_Test\1"
+    full_folder = base_folder + "\\" + stimulus_name
+    os.mkdir(full_folder)
+
+    stim_onset_times, stim_onset_line = get_step_onsets(data_stream, window=200, threshold=0.5)
+    offset_time_list = [-200,0, 200, 400, 600, 800, 1000, 2000, 3000, 4000, 5000]
+    window_size_list = [200, 200, 200, 200, 200, 200, 1000, 1000, 1000, 1000, 1000]
+    number_of_offsets = len(offset_time_list)
+
+    for offset in range(number_of_offsets):
+        offset_time = offset_time_list[offset]
+        window_size = window_size_list[offset]
+        frames_to_average = get_frames_within_windows(frame_indexes, stim_onset_times, offset_time, window_size)
+
+        save_location = full_folder + "\\" + str(offset_time) + ".png"
+        print(save_location)
+        average_frames(frames_to_average, save_location, r"C:\Widefield Imaging\LED_Alignment_Test\1\Blue_Data.hdf5")
+
+
+if __name__ == '__main__':
+
+    storage_path = r"C:\Widefield Imaging\LED_Alignment_Test\1\LED_Alignment_Test_Py_Recorder.h5"
+    table = tables.open_file(storage_path, mode='r')
+    data = table.root.Data
+
+    data_matrix = unpack_data(data)
+    data_matrix = np.clip(data_matrix, a_min=0, a_max=None)
+
+    trace_dictionary = {
+        "Reward"            :0,
+        "Lick"              :1,
+        "Stimulus 1"        :2,
+        "Stimulus 2"        :3,
+        "Odour 1"           :4,
+        "Odour 2"           :5,
+        "Irrelevane"        :6,
+        "Running"     :7,
+        "Trial End"         :8,
+        "Camera Trigger"    :9,
+        "Camera Frames"     :10,
+        "LED 1"             :11,
+        "LED 2"             :12,
+    }
+
+    plt.plot(data_matrix[trace_dictionary["Stimulus 1"]])
+    plt.show()
+
+    frame_indexes = get_frame_indexes(data_matrix[12])
+    print("Frame indexes: ", frame_indexes)
+
+    get_signal_time_course(frame_indexes, data_matrix[3], "Unrewarded Grating")
+
+    #get_signal_time_course(frame_indexes, data_matrix[1], "Lick")
+    #get_signal_time_course(frame_indexes, data_matrix[3], "Unrewarded Grating")
+
