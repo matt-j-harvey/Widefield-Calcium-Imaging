@@ -1,0 +1,67 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+import h5py
+import os
+import tables
+import scipy.io
+
+def unpack_data(data):
+    number_of_seconds = np.shape(data)[0]
+    number_of_channels = np.shape(data)[1]
+    sampling_rate = np.shape(data)[2]
+
+    print("Number of seconds", number_of_seconds)
+
+    data_matrix = np.zeros((number_of_channels, number_of_seconds * sampling_rate))
+
+    for second in range(number_of_seconds):
+        data_window = data[second]
+        start_point = second * sampling_rate
+
+        for channel in range(number_of_channels):
+            data_matrix[channel, start_point:start_point + sampling_rate] = data_window[channel]
+
+    print("data type", data_matrix.dtype)
+    return data_matrix
+
+
+storage_path = r"/home/matthew/Documents/NRXN_Switching/Py_Recorder_20200304-164600.h5"
+table = tables.open_file(storage_path, mode='r')
+data = table.root.Data
+
+data_matrix = unpack_data(data)
+data_matrix = np.clip(data_matrix, a_min=0, a_max=None)
+data_matrix = np.transpose(data_matrix)
+
+file_name = "Py_Recorder_20200304-164600.h5"
+data_type = "float 64"
+voltage_range = 10
+sample_rate = 1000
+channel_names = [   "rewd",
+                    "lick",
+                    "vis1",
+                    "vis2",
+                    "odr1",
+                    "odr2",
+                    "irrel",
+                    "running",
+                    "trial_end",
+                    "frame_trigger",
+                    "Camera Frames",
+                    "LED 1",
+                    "LED 2"]
+
+
+matlab_dictionary = {
+    "file_name":np.array(file_name),
+    "data_type":np.array(data_type),
+    "voltage_range":np.array(voltage_range),
+    "sample_rate":np.array(sample_rate),
+    "channel_names":np.array(channel_names),
+    "data":data_matrix
+                      }
+
+
+
+scipy.io.savemat("/media/matthew/32DD-AD04/Py_Recorder_20200304-164600.mat", matlab_dictionary)
