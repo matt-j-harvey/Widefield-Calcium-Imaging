@@ -1,0 +1,62 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import h5py
+import tables
+from scipy import signal, ndimage, stats
+from sklearn.linear_model import LinearRegression
+from skimage.morphology import white_tophat
+from PIL import Image
+from time import clock
+import os
+import cv2
+
+
+def load_arrays(video_file):
+    table = tables.open_file(video_file, mode='r')
+    blue_array = table.root.blue
+    violet_array = table.root.violet
+
+    print("Blue")
+    blue_image = blue_array[0]
+    #plt.imshow(blue_image)
+    #plt.show()
+
+    print("Violet")
+    violet_image = violet_array[0]
+    #plt.imshow(violet_image)
+    #plt.show()
+
+    return blue_array, violet_array
+
+
+def reconstruct_images(blue_array):
+
+    number_of_files = np.shape(blue_array)[0]
+    print("Number of files", number_of_files)
+
+    video_name = home_directory + "/original_reconstruction.avi"
+    video_codec = cv2.VideoWriter_fourcc(*'DIVX')
+    video = cv2.VideoWriter(video_name, video_codec, frameSize=(np.shape(blue_array)[2], np.shape(blue_array)[1]), fps=120)
+
+
+    for image in range(number_of_files):
+        print("Frame:", image, " of ", number_of_files )
+        frame = blue_array[image]
+        frame = np.ndarray.astype(frame, np.uint8)
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        video.write(frame)
+
+    cv2.destroyAllWindows()
+    video.release()
+
+
+# Assign File Location
+home_directory = r"/home/matthew/Documents/Neurexin_Full_Field_Visual/1"
+video_file = home_directory + "/widefield.h5"
+blue_file = home_directory + "/Blue_Data.hdf5"
+violet_file = home_directory + "/Violet_Data.hdf5"
+processed_data_file = home_directory + "/Processed_Data.hdf5"
+
+# Extract Array Data
+blue_array, violet_array = load_arrays(video_file)
+reconstruct_images(blue_array)
