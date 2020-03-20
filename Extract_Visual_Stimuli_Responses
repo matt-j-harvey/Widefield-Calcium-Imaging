@@ -1,0 +1,168 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+import h5py
+import os
+import tables
+
+def load_ai_recorder_file(ai_recorder_file_location):
+
+    table = tables.open_file(ai_recorder_file_location, mode='r')
+    data = table.root.Data
+
+    number_of_seconds = np.shape(data)[0]
+    number_of_channels = np.shape(data)[1]
+    sampling_rate = np.shape(data)[2]
+
+    print("Number of seconds", number_of_seconds)
+
+    data_matrix = np.zeros((number_of_channels, number_of_seconds * sampling_rate))
+
+    for second in range(number_of_seconds):
+        data_window = data[second]
+        start_point = second * sampling_rate
+
+        for channel in range(number_of_channels):
+            data_matrix[channel, start_point:start_point + sampling_rate] = data_window[channel]
+
+    data_matrix = np.clip(data_matrix, a_min=0, a_max=None)
+    return data_matrix
+
+
+def get_frame_indexes(frame_stream):
+    frame_indexes = {}
+    state = 1
+    threshold = 2
+    count = 0
+
+    for timepoint in range(0, len(frame_stream)):
+
+        if frame_stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                frame_indexes[timepoint] = count
+                count += 1
+
+        else:
+            if state == 1:
+                state = 0
+            else:
+                pass
+
+    return frame_indexes
+
+
+def get_step_onsets(trace, threshold=2, window=100):
+    state = 0
+    number_of_timepoints = len(trace)
+    onset_times = []
+    time_below_threshold = 0
+
+    onset_line = []
+
+    for timepoint in range(number_of_timepoints):
+        if state == 0:
+            if trace[timepoint] > threshold:
+                state = 1
+                onset_times.append(timepoint)
+                time_below_threshold = 0
+            else:
+                pass
+        elif state == 1:
+            if trace[timepoint] > threshold:
+                time_below_threshold = 0
+            else:
+                time_below_threshold += 1
+                if time_below_threshold > window:
+                    state = 0
+                    time_below_threshold = 0
+        onset_line.append(state)
+
+    return onset_times, onset_line
+
+
+def get_frames_within_windows(frame_indexes, step_onsets, offset, window_size):
+    frames_to_average = []
+    frame_times = frame_indexes.keys()
+
+    for step_onset in step_onsets:
+        interval_start = int(step_onset + offset + (-window_size/2))
+        interval_end   = int(step_onset + offset + (window_size/2))
+
+        for timepoint in range(interval_start, interval_end):
+            if timepoint in frame_times:
+                frames_to_average.append(frame_indexes[timepoint])
+
+    return frames_to_average
+
+
+def average_frames(frames_to_average, processed_file_location, save_location):
+    frames = []
+
+    processed_data_file = h5py.File(processed_file_location, 'r')
+    processed_data = processed_data_file["Data"]
+
+    number_of_frames_to_average = len(frames_to_average)
+    count = 0
+    for frame in frames_to_average:
+        data = processed_data[:, frame]
+        frames.append(data)
+        count+=1
+        print((count / number_of_frames_to_average)*100, "% complete")
+
+    mean_frame = np.mean(frames, axis=0)
+    mean_frame = np.ndarray.reshape(mean_frame, (600, 608))
+    np.save(save_location, mean_frame)
+
+
+
+def get_signal_time_course(frame_indexes, stim_onset_times, processed_file_location, save_location):
+
+    if not os.path.exists(save_location):
+        os.mkdir(save_location)
+
+    start_time = -200
+    end_time = 3000
+    step = 10
+    window_size = 200
+
+    offset_time_list = []
+    for x in range(start_time, end_time, step):
+        offset_time_list.append(x)
+    number_of_offsets = len(offset_time_list)
+
+    for offset in range(number_of_offsets):
+        offset_time = offset_time_list[offset]
+        frames_to_average = get_frames_within_windows(frame_indexes, stim_onset_times, offset_time, window_size)
+        file_name = save_location + "//" + str(offset_time)
+        average_frames(frames_to_average, processed_file_location, file_name)
+
+
+
+if __name__ == '__main__':
+
+    home_directory = r"/home/matthew/Documents/Neurexin_Full_Field_Visual/1"
+    processed_file_location = home_directory + "/Processed_Data.hdf5"
+    ai_recorder_file_location = home_directory + "/20200318-150519.h5"
+    save_location = r"/home/matthew/Documents/Neurexin_Full_Field_Visual/1/visual_stimuli_aligned_responses"
+
+
+    ai_recorder_data = load_ai_recorder_file(ai_recorder_file_location)
+
+    threshold = 0.24
+    photodiode_channel = 6
+
+    step_onsets, step_line = get_step_onsets(ai_recorder_data[photodiode_channel], threshold=0.24, window=10)
+    print("Photodiode Signal")
+    plt.plot(ai_recorder_data[photodiode_channel])
+    plt.plot(step_line)
+    plt.show()
+
+
+    frame_onsets = get_frame_indexes(ai_recorder_data[11])
+    print("Frame Onsets")
+    print(frame_onsets)
+
+
+    get_signal_time_course(frame_onsets, step_onsets, processed_file_location, save_location)
+
