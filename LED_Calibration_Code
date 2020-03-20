@@ -1,0 +1,192 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import h5py
+import tables
+from scipy import signal, ndimage, stats
+from sklearn.linear_model import LinearRegression
+from skimage.morphology import white_tophat
+from PIL import Image
+from time import clock
+import os
+import cv2
+
+def load_arrays(video_file):
+    table = tables.open_file(video_file, mode='r')
+    blue_array = table.root.blue
+    violet_array = table.root.violet
+
+    print("Blue Frames: ", np.shape(blue_array))
+    print("Violet Frames: ", np.shape(violet_array))
+
+    return blue_array, violet_array
+
+
+def get_frame_values(array):
+
+    frame_means = []
+    number_of_images = np.shape(array)[0]
+    for frame in range(number_of_images):
+        mean = np.mean(array[frame])
+        frame_means.append(mean)
+
+    return frame_means
+
+
+def unpack_data(ai_recorder_file):
+
+    table = tables.open_file(ai_recorder_file, mode='r')
+    data = table.root.Data
+    number_of_seconds = np.shape(data)[0]
+    number_of_channels = np.shape(data)[1]
+    sampling_rate = np.shape(data)[2]
+
+    print("Number of seconds", number_of_seconds)
+
+    data_matrix = np.zeros((number_of_channels, number_of_seconds * sampling_rate))
+
+    for second in range(number_of_seconds):
+        data_window = data[second]
+        start_point = second * sampling_rate
+
+        for channel in range(number_of_channels):
+            data_matrix[channel, start_point:start_point + sampling_rate] = data_window[channel]
+
+    return data_matrix
+
+
+def get_frame_indexes(frame_stream):
+    frame_indexes = {}
+    state = 1
+    threshold = 2
+    count = 0
+
+    for timepoint in range(0, len(frame_stream)):
+
+        if frame_stream[timepoint] > threshold:
+            if state == 0:
+                state = 1
+                frame_indexes[timepoint] = count
+                count += 1
+
+        else:
+            if state == 1:
+                state = 0
+            else:
+                pass
+
+    return frame_indexes
+
+def get_step_onsets(trace, threshold=2, window=100):
+    state = 0
+    number_of_timepoints = len(trace)
+    onset_times = []
+    time_below_threshold = 0
+
+    onset_line = []
+
+    for timepoint in range(number_of_timepoints):
+        if state == 0:
+            if trace[timepoint] > threshold:
+                state = 1
+                onset_times.append(timepoint)
+                time_below_threshold = 0
+            else:
+                pass
+        elif state == 1:
+            if trace[timepoint] > threshold:
+                time_below_threshold = 0
+            else:
+                time_below_threshold += 1
+                if time_below_threshold > window:
+                    state = 0
+                    time_below_threshold = 0
+        onset_line.append(state)
+
+    return onset_times, onset_line
+
+def create_led_raster(stimuli_onsets, frame_indexes, frame_means):
+
+    #Create The Blank Raster
+    number_of_stimuli = len(stimuli_onsets)
+    print("Number of stimuli", number_of_stimuli)
+    window_size = 200
+    led_raster = np.zeros((number_of_stimuli, window_size*2+1))
+
+    #Populate The Raster
+    frame_times = frame_indexes.keys()
+    for stimuli in range(number_of_stimuli):
+        stimuli_onset = stimuli_onsets[stimuli]
+
+        for timepoint in range(stimuli_onset - window_size, stimuli_onset + window_size):
+
+            if timepoint in frame_times:
+                raster_index = (timepoint - stimuli_onset) + window_size
+                print("Stimuli onset", stimuli_onset, "timepoint", timepoint, "Raster index", raster_index)
+                print(raster_index)
+                frame_index = frame_indexes[timepoint]
+                frame_mean = frame_means[frame_index]
+                led_raster[stimuli, raster_index:] = frame_mean
+
+    led_raster[:,200] = 5
+    plt.title("LED Trial Raster")
+    plt.ylabel("Trials: ")
+    plt.xlabel("Time: stimuli onset is 150")
+    plt.imshow(led_raster[:,50:350])
+    plt.show()
+
+
+def create_led_onset_histogram(stimuli_onsets, frame_indexes, frame_means):
+
+    threshold = 44
+    number_of_stimuli = len(stimuli_onsets)
+    window_size = 200
+    frame_times = frame_indexes.keys()
+
+    time_distances = []
+
+
+    for stimuli in range(number_of_stimuli):
+        stimuli_onset = stimuli_onsets[stimuli]
+
+        for timepoint in range(stimuli_onset - window_size, stimuli_onset + window_size):
+            if timepoint in frame_times:
+                frame_index = frame_indexes[timepoint]
+                frame_mean  = frame_means[frame_index]
+
+                if frame_mean > threshold:
+                    time_distance = timepoint - stimuli_onset
+                    time_distances.append(time_distance)
+                    break
+
+    n, bins, patches = plt.hist(time_distances)
+    plt.title("Camera Stimuli Jitter")
+    plt.xlabel("Stimuli onset time -  time frame brightness crosses threshold")
+    plt.ylabel("Frequency")
+    plt.grid(True)
+    plt.show()
+
+
+home_directory      = r"/home/matthew/Documents/LED_TEST/1"
+video_file          = home_directory + "/widefield.h5"
+ai_recorder_file    = home_directory + "/Ai_Recorder.h5"
+
+
+blue_array, violet_array = load_arrays(video_file)
+frame_means = get_frame_values(blue_array)
+plt.plot(frame_means)
+plt.show()
+
+data_matrix = unpack_data(ai_recorder_file)
+data_matrix = np.clip(data_matrix, a_min=0, a_max=None)
+print("Data Matrix: ", np.shape(data_matrix))
+
+frame_onsets = get_frame_indexes(data_matrix[12])
+print("Frame Onsets: ", frame_onsets)
+print("Frames: ", len(frame_onsets.keys()))
+
+stimuli_stream = data_matrix[2]
+stim_onsets, stim_onset_line = get_step_onsets(stimuli_stream)
+
+
+create_led_raster(stim_onsets, frame_onsets, frame_means)
+create_led_onset_histogram(stim_onsets, frame_onsets, frame_means)
