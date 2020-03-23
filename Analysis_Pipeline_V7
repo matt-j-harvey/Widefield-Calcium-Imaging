@@ -179,7 +179,7 @@ def process_pixels(blue_data, violet_data, output_file):
     print("Number of chunks", number_of_chunks)
 
     with h5py.File(output_file, "w") as f:
-        dataset = f.create_dataset("Data", (number_of_images, number_of_pixels), dtype=np.float32, chunks=True, compression="gzip", compression_opts=9)
+        dataset = f.create_dataset("Data", (number_of_pixels, number_of_images), dtype=np.float32, chunks=True, compression="gzip", compression_opts=9)
 
         for chunk_index in range(number_of_chunks):
             print("Chunk: ", chunk_index)
@@ -191,9 +191,8 @@ def process_pixels(blue_data, violet_data, output_file):
 
             processed_data = process_traces(blue_chunk, violet_chunk)
             processed_data = signal.filtfilt(b, a, processed_data, axis=1)
-            processed_data = np.transpose(processed_data)
 
-            dataset[:, chunk_start:chunk_stop] = processed_data
+            dataset[chunk_start:chunk_stop, :] = processed_data
 
 
 def reconstruct_images(processed_file_location, blue_array):
@@ -269,20 +268,20 @@ home_directory      = r"/home/matthew/Documents/2020_03_12/1"
 video_file          = home_directory + "/widefield.h5"
 blue_file           = home_directory + "/Blue_Data.hdf5"
 violet_file         = home_directory + "/Violet_Data.hdf5"
-processed_data_file = home_directory + "/Processed_Data_Framewise.hdf5"
+processed_data_file = home_directory + "/Processed_Data.hdf5"
 
 
 #Extract Array Data
-#blue_array, violet_array = load_arrays(video_file)
+blue_array, violet_array = load_arrays(video_file)
 
 
 #Restructure Data
-#restructure_data(blue_array,    blue_file)
-#restructure_data(violet_array,  violet_file)
+restructure_data(blue_array,    blue_file)
+restructure_data(violet_array,  violet_file)
 
 
-#get_max_projection(blue_array)
-#get_mask(0.1)
+get_max_projection(blue_array)
+get_mask(0.1)
 
 
 #Extract Signal
@@ -290,4 +289,4 @@ process_pixels(blue_file, violet_file, processed_data_file)
 
 
 #Reconstruct Images
-#reconstruct_images(processed_data_file, blue_array)
+reconstruct_images(processed_data_file, blue_array)
