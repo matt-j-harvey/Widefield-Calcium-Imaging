@@ -1,0 +1,129 @@
+from PyQt5.QtWidgets import *
+from PyQt5.QtGui import *
+from PyQt5.QtCore import *
+import sys
+import imageio
+import numpy as np
+
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib import cm
+from matplotlib.path import Path
+from matplotlib.widgets import LassoSelector
+
+global list_of_all_points
+global rows
+global columns
+serial_list_of_all_points = []
+cartesian_list_of_all_points = []
+
+def create_serial_list_of_all_points():
+    global serial_list_of_all_points
+    number_of_points = rows*columns
+    list_of_all_points = np.arange(0,number_of_points)
+
+def create_cartesian_list_of_all_points():
+    global cartesian_list_of_all_points
+    cartesian_list_of_all_points = []
+    for y in range(rows):
+        for x in range(columns):
+            cartesian_list_of_all_points.append([y, x])
+
+
+def serial_to_cartesian(serial_point):
+    y_coord = int(serial_point / columns)
+    x_coord = serial_point - (y_coord + columns)
+    return y_coord, x_coord
+
+def display_image(figure, canvas, image):
+    figure.clear()
+    axis = figure.add_subplot(111)
+    axis.imshow(image, cmap='gray')
+    axis.axis("off")
+    plt.show()
+    canvas.draw()
+    canvas.update()
+
+
+
+
+
+class region_selection_window(QWidget):
+
+    def __init__(self, directory, parent=None):
+        super(region_selection_window, self).__init__(parent)
+
+        #Setup Window
+        self.setWindowTitle("Region Selection")
+        self.setGeometry(0,0,1000,500)
+        self.show()
+
+        #Create Figure
+        self.display_figure = Figure()
+        self.display_canvas = FigureCanvas(self.display_figure)
+
+        self.layout = QGridLayout()
+        self.setLayout(self.layout)
+        self.layout.addWidget(self.display_canvas)
+
+        self.display_mean_image(directory)
+
+
+    def display_mean_image(self, directory):
+        global rows
+        global columns
+
+        self.mean_image_filepath = directory + "/Mean_Image.png"
+        self.mean_image = imageio.imread(self.mean_image_filepath)
+
+        rows = np.shape(self.mean_image)[0]
+        columns = np.shape(self.mean_image)[1]
+
+        create_serial_list_of_all_points()
+        create_cartesian_list_of_all_points()
+
+        display_image(self.display_figure, self.display_canvas, self.mean_image)
+
+
+
+def onselect(verts):
+
+    selected_region = np.zeros(np.shape(window_instance.mean_image))
+    region = Path(verts)
+    contained_point_decisions = region.contains_points(cartesian_list_of_all_points)
+    selected_point_indicies = np.argwhere(contained_point_decisions)
+    print("Selected point indicies", selected_point_indicies)
+
+    #selected_verticies = np.extract(contained_point_decisions, cartesian_list_of_all_points)
+
+
+
+    for selected_point in selected_point_indicies:
+        selected_point = selected_point[0]
+
+        print("Selected point", selected_point)
+        y_coord = cartesian_list_of_all_points[selected_point][1]
+        print(y_coord)
+        x_coord = cartesian_list_of_all_points[selected_point][0]
+        print(x_coord)
+
+        selected_region[y_coord, x_coord] = window_instance.mean_image[y_coord, x_coord, 0]/255
+        print("value",  window_instance.mean_image[y_coord, x_coord, 0])
+    plt.imshow(selected_region, vmin=0, vmax=255)
+    plt.show()
+
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+
+    directory = "C:/Users/matth/OneDrive/Pictures/Trace_Example"
+
+    window_instance = region_selection_window(directory)
+
+    lasso_axis = window_instance.display_figure.get_axes()
+    lasso = LassoSelector(lasso_axis[0], onselect)
+
+    sys.exit(app.exec_())
